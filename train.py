@@ -8,37 +8,52 @@ import numpy as np
 import math
 from torch.optim import Adam
 from tensorboardX import SummaryWriter
+import logging
 
 
 def train(
             batch_size=8, 
             epoch=5,
             learing_rate=1e-3,
-            result_path='./result'):
+            tensorboard_path='./tensorboard_result',
+            log_path='./log/train.log',
+            model_param_savepath='./model_param'):
 
-    writer = SummaryWriter(result_path)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    logging.basicConfig(level=logging.INFO, filename=log_path)
+
+    writer = SummaryWriter(tensorboard_path)
     train_loader = DataLoader(VisDialDataset(None, 'train'), collate_fn=visdial_collate_fn,
                               batch_size=batch_size, shuffle=True, num_workers=4)
-    model = ShowTellNet()
+    test_loader = DataLoader(VisDialDataset(None, 'val'), collate_fn=visdial_collate_fn,
+                              batch_size=batch_size, shuffle=True, num_workers=4)
+    val_length = len(VisDialDataset(None, 'val'))
+
+    model = ShowTellNet().to(device)
     optimizer = Adam(model.parameters(), lr=learing_rate)
-    loss_fn = LossNet()
+    loss_fn = LossNet().to(device)
     for eps in range(epoch):
+        
+        model.train()
+        logging.info("train epoch: %d"%eps)
         for cnt, batched in enumerate(train_loader):
-            cap = batched['captions']
-            img = batched['features']
-            one_hot_cap = one_hot_encoder(cap)
+            cap = batched['captions'].to(device)
+            img = batched['features'].to(device)
+            one_hot_cap = one_hot_encoder(cap).to(device)
             seq_prob, (_, _)=model(img, one_hot_cap)
             loss = loss_fn(cap, seq_prob)
             
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
-            if cnt%20==0:
-                print("epoch: %d, count: %d, loss:%f: "%(eps, cnt,loss.item()))
-                writer.add_scalar('loss', loss, cnt)
+            if cnt%50==0:
+                logging.info("count: %d, loss:%f: "%(cnt,loss.item()))
+                writer.add_scalar('Train_Loss', loss, cnt)
+
+        # save model of an epoch        
+        torch.save(model.state_dict(), model_param_savepath+"/epoch%d.pth"%eps)
+        
             
-
-
 
 if __name__=="__main__":
     train()

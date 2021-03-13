@@ -97,7 +97,8 @@ def visdial_collate_fn(data):
 if __name__ == '__main__':
     train_loader = DataLoader(VisDialDataset(None, 'train'), collate_fn=visdial_collate_fn,
                               batch_size=4, shuffle=True, num_workers=4)
-
+    print(len(VisDialDataset(None, 'val')))# 2064
+    print(len(VisDialDataset(None, 'train')))# 123287
     for cnt, batched in enumerate(train_loader):
         print(batched["captions"])
     
