@@ -1,0 +1,14 @@
+data: /mnt/VisDial_hdd
+
+
+entry = {
+        'features': new_feature, # batch_size * 4096 -> 2048 -> 1024 -> 512 -> 256 -> 128 -> 64 -> 24
+        'captions': new_captions,# batch_size * sentence_length
+        'questions': new_quests, #  bs * 24
+        'answers': new_answers, #  bs * 10 * 32
+        'caption_msks': caption_msks, # bs * 17
+        'question_msks': quest_msks, # bs * 10 * 21
+        'answer_msks': answer_msks, # bs * 10 * 26
+        'scene_id': list(scene_id), # int list, batch_size
+        'image_id': list(image_id), # int list, batch_size
+    }
