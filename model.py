@@ -6,11 +6,12 @@ from torch.utils.data import Dataset, DataLoader
 import numpy as np
 import math
 
+
 def index2word(index:torch.tensor):
     """
-    index: batch_size * 24
+    index: batch_size * sentence_length
     """
-    with open('data/cache/ind2word_32525.pkl', 'rb') as f:
+    with open('./data/cache/ind2word_32525.pkl', 'rb') as f:
         ind2word = pkl.load(f) # total 32529 word
 
     index_np = index.numpy()
@@ -21,7 +22,6 @@ def index2word(index:torch.tensor):
             sentence.append(ind2word[index_np[batch,i]])
         sentences.append(sentence)
     return sentences
-
 
 def word2index(sentence):
     with open('data/cache/word2ind_32525.pkl', 'rb') as f:
@@ -45,25 +45,43 @@ def one_hot_encoder(index:torch.tensor):
 class CNN(nn.Module):
     def __init__(self, input_channels=4096):
         super(CNN, self).__init__()
-        self.conv1 = nn.Conv1d(in_channels=input_channels, out_channels=2048,kernel_size=3)
+        self.conv1 = nn.Conv1d(in_channels=input_channels, out_channels=2048,kernel_size=1)
         self.bn1 = nn.BatchNorm1d(2048)
         self.relu1 = nn.ReLU()
-        self.conv1 = nn.Conv1d(in_channels=2048, out_channels=1024, kernel_size=3)
+        self.conv2 = nn.Conv1d(in_channels=2048, out_channels=1024,kernel_size=1)
         self.bn2 = nn.BatchNorm1d(1024)
-        
+        self.relu2 = nn.ReLU()
+        self.conv3 = nn.Conv1d(in_channels=1024, out_channels=512, kernel_size=1)
+        self.bn3 = nn.BatchNorm1d(512)
+        self.relu3 = nn.ReLU()
 
-    def forward(self):
-        pass
+        self.init_weights()
 
+    def init_weights(self):
+        for weight in self.parameters():
+            weight.data.uniform_(0, 1)
 
+    def forward(self, x):
+        batch_szie = x.shape[0]
+        x = x.reshape(batch_szie, 4096,1)
+        x = self.relu1(self.bn1(self.conv1(x)))
+        x = self.relu2(self.bn2(self.conv2(x)))
+        x = self.relu3(self.bn3(self.conv3(x)))
+        x = x.reshape(batch_szie, 512)
+        return x
 
-class LSTM(nn.Module):
     
-    def __init__(self, input_sz:int, hidden_sz:int):
-        super(LSTM, self).__init__()
+class ShowTellNet(nn.Module):
+    
+    def __init__(self, origin_size=32529, input_sz=512, hidden_sz=512, img_feature_sz=4096):
+        super(ShowTellNet, self).__init__()
         self.input_size = input_sz
         self.hidden_size = hidden_sz
         
+        self.embedding = nn.Embedding(origin_size, hidden_sz)
+        #self.bn1 = nn.BatchNorm1d(input_sz)
+        self.linear_out = nn.Linear(hidden_sz, origin_size)
+        self.cnn = CNN()
         #i_t
         self.U_i = nn.Parameter(torch.Tensor(input_sz, hidden_sz))
         self.V_i = nn.Parameter(torch.Tensor(hidden_sz, hidden_sz))
@@ -84,6 +102,7 @@ class LSTM(nn.Module):
         self.V_o = nn.Parameter(torch.Tensor(hidden_sz, hidden_sz))
         self.b_o = nn.Parameter(torch.Tensor(hidden_sz))
         
+        self.softmax = nn.Softmax(2)
         self.init_weights()
 
     def init_weights(self):
@@ -93,12 +112,17 @@ class LSTM(nn.Module):
     
 
     def forward(self,
+                img,
                 x,
                 init_states=None):
         
         """
         x.shape represents (batch_size, sequence_size, input_size)
         """
+        img_feature = self.cnn(img)
+        #x = self.linear_in(x)
+        x = self.embedding(x)
+        #print(x.shape)
         bs, seq_sz, _ = x.size()
         hidden_seq = []
         
@@ -109,60 +133,96 @@ class LSTM(nn.Module):
             )
         else:
             h_t, c_t = init_states
-            
+
+        x_t = img_feature.reshape(bs, self.hidden_size)
+        i_t = torch.sigmoid(img_feature + h_t @ self.V_i + self.b_i)
+        f_t = torch.sigmoid(img_feature + h_t @ self.V_f + self.b_f)
+        g_t = torch.tanh(img_feature + h_t @ self.V_c + self.b_c)
+        o_t = torch.sigmoid(img_feature + h_t @ self.V_o + self.b_o)
+        c_t = f_t * c_t + i_t * g_t
+        h_t = o_t * torch.tanh(c_t)   
+        # hidden_seq.append(h_t.unsqueeze(0)) 
+
         for t in range(seq_sz):
-            x_t = x[:, t, :]
-            
+            x_t = x[:, t, :] # 4*512
+            # print(x_t.shape)
+            #x_t = self.bn1(x_t)
             i_t = torch.sigmoid(x_t @ self.U_i + h_t @ self.V_i + self.b_i)
             f_t = torch.sigmoid(x_t @ self.U_f + h_t @ self.V_f + self.b_f)
             g_t = torch.tanh(x_t @ self.U_c + h_t @ self.V_c + self.b_c)
             o_t = torch.sigmoid(x_t @ self.U_o + h_t @ self.V_o + self.b_o)
             c_t = f_t * c_t + i_t * g_t
-            h_t = o_t * torch.tanh(c_t)
-            
+            h_t = o_t * torch.tanh(c_t)# 4* 512
+
             hidden_seq.append(h_t.unsqueeze(0))
         
         #reshape hidden_seq p/ retornar
         hidden_seq = torch.cat(hidden_seq, dim=0)
         hidden_seq = hidden_seq.transpose(0, 1).contiguous()
-        return hidden_seq, (h_t, c_t)
+        hidden_seq = self.linear_out(hidden_seq)
+
+        seq_pred = self.softmax(hidden_seq)
+        return seq_pred, (h_t, c_t)
 
 
-class ShowTellNet(nn.Module):
-    def __init__(self, input_sz=32529, hidden_sz=256, output_sz=32529,image_feature_sz=4096):
-        super(ShowTellNet, self).__init__()
-        self.hidden_size = hidden_sz
-        self.LSTM = LSTM(input_sz=hidden_sz, hidden_sz=hidden_sz)
-        self.linear_in = nn.Linear(input_sz, hidden_sz)
-        self.linear_out = nn.Linear(hidden_sz, output_sz)
-        self.linear_img = nn.Linear(image_feature_sz, 14*hidden_sz)
-        self.softmax = nn.Softmax(2)
+    def predict(self, img:torch.tensor, init_states=None):
 
-        self.init_weights()
-
-    def init_weights(self):
-        stdv = 1.0 / math.sqrt(self.hidden_size)
-        for weight in self.parameters():
-            weight.data.uniform_(-stdv, stdv)
-
-    def forward(self, image_feature, one_hot_caption):
-
-        x = self.linear_in(one_hot_caption) # batch * sentence_length * 4096
-
-        batch_size = image_feature.shape[0]
-        feature = self.linear_img(image_feature).reshape(batch_size, 14, self.hidden_size)
-
-        # using image feature
-        _, (h_0,c_0) = self.LSTM(feature)
-
-        # using caption
-        hid_seq, (h_t, c_t) = self.LSTM(x, init_states=(h_0,c_0))
+        img_feature = self.cnn(img)
+        #x = self.linear_in(x)
+     
+        #print(x.shape)
+        bs, _ = img_feature.size()
+        seq_sz = 24
         
-        hid_seq = self.linear_out(hid_seq)
+        x = torch.ones(bs)*32526
+        x_t = self.embedding(x.long())# 4*512
         
-        seq_prob = self.softmax(hid_seq)
+        hidden_seq = []
+        
+        if init_states is None:
+            h_t, c_t = (
+                torch.zeros(bs, self.hidden_size).to(x.device),
+                torch.zeros(bs, self.hidden_size).to(x.device),
+            )
+        else:
+            h_t, c_t = init_states
 
-        return seq_prob,(h_t, c_t)
+        x_t = img_feature.reshape(bs, self.hidden_size) # 4 * 512
+        
+        i_t = torch.sigmoid(img_feature + h_t @ self.V_i + self.b_i)
+        f_t = torch.sigmoid(img_feature + h_t @ self.V_f + self.b_f)
+        g_t = torch.tanh(img_feature + h_t @ self.V_c + self.b_c)
+        o_t = torch.sigmoid(img_feature + h_t @ self.V_o + self.b_o)
+        c_t = f_t * c_t + i_t * g_t
+        h_t = o_t * torch.tanh(c_t)   
+        # hidden_seq.append(h_t.unsqueeze(0)) 
+
+        for t in range(seq_sz):
+           
+            #x_t = self.bn1(x_t)
+            i_t = torch.sigmoid(x_t @ self.U_i + h_t @ self.V_i + self.b_i)
+            f_t = torch.sigmoid(x_t @ self.U_f + h_t @ self.V_f + self.b_f)
+            g_t = torch.tanh(x_t @ self.U_c + h_t @ self.V_c + self.b_c)
+            o_t = torch.sigmoid(x_t @ self.U_o + h_t @ self.V_o + self.b_o)
+            c_t = f_t * c_t + i_t * g_t
+            h_t = o_t * torch.tanh(c_t) # 4 * 512
+            
+            word_pred = self.linear_out(h_t) # 4 * 32529
+            word_pred = torch.softmax(word_pred, dim=1)
+            word_pred = torch.argmax(word_pred, dim=1).long()
+            
+            # next input
+            x_t = self.embedding(word_pred)
+
+            hidden_seq.append(word_pred.unsqueeze(0))
+        
+        #reshape hidden_seq p/ retornar
+        hidden_seq = torch.cat(hidden_seq, dim=0)
+        hidden_seq = hidden_seq.transpose(0, 1).contiguous()
+
+        return hidden_seq
+   
+        
         
 class LossNet(nn.Module):
     
@@ -171,10 +231,14 @@ class LossNet(nn.Module):
 
     def forward(self, cap_index, pred):
         loss_sum=0
+        
         for batch in range(cap_index.shape[0]):
+            num = cap_index.shape[1]
             for i in range(cap_index.shape[1]):
-                ind = cap_index[batch, i]
-                loss_sum = loss_sum - torch.log(pred[batch, i, ind])
+                if(i+1==cap_index.shape[1]):
+                    break
+                ind = cap_index[batch, i+1]
+                loss_sum = loss_sum - np.square(1-i/num)*torch.log(pred[batch, i, ind])
         return loss_sum
 
 
@@ -183,11 +247,23 @@ if __name__=="__main__":
                               batch_size=4, shuffle=True, num_workers=4)
     net = ShowTellNet()
     loss_fn = LossNet()
+    net.load_state_dict(torch.load("model_param/epoch18.pth"))
+    # train
     for cnt, batched in enumerate(train_loader):
         cap = batched['captions']
         img = batched['features']
-        one_hot_cap = one_hot_encoder(cap)
-        seq_prob, (h_t, c_t)=net(img, one_hot_cap)
+        #one_hot_cap = one_hot_encoder(cap)
+        seq_prob, (h_t, c_t)=net(img, cap)
         loss = loss_fn(cap, seq_prob)
         print(loss)
         break
+
+    # predict
+    """
+    for cnt, batched in enumerate(train_loader):
+        cap = batched['captions']
+        img = batched['features']
+        #one_hot_cap = one_hot_encoder(cap)
+        real_sentence=net.predict(img)
+        break
+    """

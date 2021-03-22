@@ -15,10 +15,10 @@ def test(
             batch_size=8, 
             epoch=5,
             result_path='./result',
-            model_param_filepath='?'):
+            model_param_filepath='./model_param/epoch4.pth'):
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    logging.basicConfig(level=logging.INFO, filename='./log/train.log')
+    logging.basicConfig(level=logging.INFO, filename='./log/test.log')
 
     writer = SummaryWriter(result_path)
     
